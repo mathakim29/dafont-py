@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CODEF ANSI Logo Maker - Python port
+render_font ANSI Logo Maker - Python port
 Original PHP/JS by Antoine Santo (NoNameNo)
 """
 
@@ -29,17 +29,17 @@ maxPOSY = 0
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        prog="codef",
-        description="CODEF ANSI Logo Maker — render text using TheDraw Font (.TDF) files",
+        prog="render_font",
+        description="Render text using TheDraw Font (.TDF) files",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 examples:
-  python codef.py "HELLO"
-  python codef.py "HELLO" --output ansi
-  python codef.py "HELLO" --output html > logo.html
-  python codef.py "HELLO WORLD" --font 2 --output ansi
-  python codef.py "HI" --font 1 --spacing 3 --space-size 6 --variant 0
-  python codef.py --list-fonts
+  python render_font.py "HELLO"
+  python render_font.py "HELLO" --output ansi
+  python render_font.py "HELLO" --output html > logo.html
+  python render_font.py "HELLO WORLD" --font 2 --output ansi
+  python render_font.py "HI" --font 1 --spacing 3 --space-size 6 --variant 0
+  python render_font.py --list-fonts
         """
     )
 
@@ -115,7 +115,7 @@ def main():
         sys.exit(0)
 
     if args.text is None:
-        print("Error: please provide text to render, e.g.: python codef.py \"HELLO\"")
+        print("Error: please provide text to render, e.g.: python render_font.py \"HELLO\"")
         sys.exit(1)
 
     if not files:
@@ -539,7 +539,7 @@ def render_html():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CODEF ANSI Logo — {mytxt}</title>
+<title>render_font ANSI Logo — {mytxt}</title>
 <style>
   /* Embed a fallback monospace stack; users can drop in Perfect DOS VGA 437
      by placing the .woff file next to this HTML and adjusting the src below. */

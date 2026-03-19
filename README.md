@@ -1,6 +1,7 @@
 ### TDFont Renderer in Python (Remake)
 [Based on this repository](https://github.com/N0NameN0/CODEF_Ansi_Logo_Maker)
 
+### CLI Usage: 
 ```
 usage: dafont [-h] [--font INDEX] [--spacing N] [--space-size N] [--variant INDEX] [--list-fonts] text
 
@@ -15,3 +16,6 @@ options:
   --variant, -v INDEX   Font variant index within the .TDF file (default: 0)
   --list-fonts, -l      List all available fonts and exit
   --output, -o          set output type (html, ansi)
+```
+
+### Library Usage
