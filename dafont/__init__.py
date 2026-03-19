@@ -1,37 +1,3 @@
-"""
-codef — Python library for rendering text using TheDraw Font (.TDF) files.
-
-Basic usage
------------
-    from codef import CodefRenderer
-
-    renderer = CodefRenderer("FONTS/")          # point at your TDF directory
-    print(renderer.render_ansi("HELLO"))        # ANSI escape-code string
-    print(renderer.render_html("HELLO"))        # self-contained HTML page
-
-Selecting fonts / variants
---------------------------
-    fonts = renderer.list_fonts()               # list of available font paths
-    ansi  = renderer.render_ansi("HI", font_index=2)
-    ansi  = renderer.render_ansi("HI", font_path="FONTS/BLOCK.TDF")
-    ansi  = renderer.render_ansi("HI", font_index=0, variant=1)
-
-Tweaking spacing
-----------------
-    ansi = renderer.render_ansi(
-        "HI",
-        spacing=3,       # columns between characters (default 2)
-        space_size=6,    # width of the space character (default 5)
-    )
-
-Lower-level access
-------------------
-    tdf  = renderer.load_tdf("FONTS/BLOCK.TDF")   # TDFFont object
-    mat  = renderer.build_matrix("HI", tdf)        # RenderMatrix object
-    ansi = renderer.matrix_to_ansi(mat)
-    html = renderer.matrix_to_html(mat, title="HI")
-"""
-
 from __future__ import annotations
 
 import glob
@@ -169,10 +135,10 @@ class UnsupportedFontTypeError(CodefError):
 
 
 # ---------------------------------------------------------------------------
-# CodefRenderer
+# TDFRenderer
 # ---------------------------------------------------------------------------
 
-class CodefRenderer:
+class TDFRenderer:
     """
     High-level interface for rendering text with TheDraw Fonts.
 
