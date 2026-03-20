@@ -1,520 +1,440 @@
-from __future__ import annotations
+#!/usr/bin/env python3
 
-import glob
+
+import sys
 import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
+import glob
+import argparse
+
+# Resolve FONTS directory relative to this module file
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_FONTS_DIR = os.path.join(_MODULE_DIR, "FONTS")
 
 
-# ---------------------------------------------------------------------------
-# CP437 → Unicode mapping
-# ---------------------------------------------------------------------------
+class TDFRender:
+    def __init__(self, spacing=2, space_size=5, fonts_dir=None):
+        self.curspacing = spacing
+        self.curspacesize = space_size
+        self.fonts_dir = fonts_dir or _DEFAULT_FONTS_DIR
+        self._reset_state()
 
-_CP437_MAP: Dict[int, int] = {
-    128: 199,  129: 252,  130: 233,  131: 226,  132: 228,  133: 224,
-    134: 229,  135: 231,  136: 234,  137: 235,  138: 232,  139: 239,
-    140: 238,  141: 236,  142: 196,  143: 197,  144: 201,  145: 230,
-    146: 198,  147: 244,  148: 246,  149: 242,  150: 251,  151: 249,
-    152: 255,  153: 214,  154: 220,  155: 162,  156: 163,  157: 165,
-    158: 8359, 159: 402,  160: 225,  161: 237,  162: 243,  163: 250,
-    164: 241,  165: 209,  166: 170,  167: 186,  168: 191,  169: 8976,
-    170: 172,  171: 189,  172: 188,  173: 161,  174: 171,  175: 187,
-    176: 9617, 177: 9618, 178: 9619, 179: 9474, 180: 9508, 181: 9569,
-    182: 9570, 183: 9558, 184: 9557, 185: 9571, 186: 9553, 187: 9559,
-    188: 9565, 189: 9564, 190: 9563, 191: 9488, 192: 9492, 193: 9524,
-    194: 9516, 195: 9500, 196: 9472, 197: 9532, 198: 9566, 199: 9567,
-    200: 9562, 201: 9556, 202: 9577, 203: 9574, 204: 9568, 205: 9552,
-    206: 9580, 207: 9575, 208: 9576, 209: 9572, 210: 9573, 211: 9561,
-    212: 9560, 213: 9554, 214: 9555, 215: 9579, 216: 9578, 217: 9496,
-    218: 9484, 219: 9608, 220: 9604, 221: 9612, 222: 9616, 223: 9600,
-    224: 945,  225: 223,  226: 915,  227: 960,  228: 931,  229: 963,
-    230: 181,  231: 964,  232: 934,  233: 920,  234: 937,  235: 948,
-    236: 8734, 237: 966,  238: 949,  239: 8745, 240: 8801, 241: 177,
-    242: 8805, 243: 8804, 244: 8992, 245: 8993, 246: 247,  247: 8776,
-    248: 176,  249: 8729, 250: 183,  251: 8730, 252: 8319, 253: 178,
-    254: 9632,
-}
+    def _reset_state(self):
+        self.workvar = None
+        self.matrix = []
+        self.BGmatrix = []
+        self.FTmatrix = []
+        self.fnum = 0
+        self.mytxt = ""
+        self.POSX = 1
+        self.POSY = 1
+        self.BGCOL = 0
+        self.FTCOL = 15
+        self.CHARPOSX = 1
+        self.maxPOSX = 0
+        self.maxPOSY = 0
 
-# CGA/DOS 16-colour palette
-_FT_CSS = [
-    "#000000", "#0000AA", "#00AA00", "#00AAAA",
-    "#AA0000", "#AA00AA", "#AA5500", "#AAAAAA",
-    "#555555", "#5555FF", "#55FF55", "#55FFFF",
-    "#FF5555", "#FF55FF", "#FFFF55", "#FFFFFF",
-]
-_BG_CSS = _FT_CSS  # same palette for backgrounds
+    # -----------------------------------------------------------------------
+    # Public API
+    # -----------------------------------------------------------------------
 
-# ANSI escape colour codes
-_FT_ANSI: Dict[int, int] = {
-     0: 30,  1: 34,  2: 32,  3: 36,
-     4: 31,  5: 35,  6: 33,  7: 37,
-     8: 90,  9: 94, 10: 92, 11: 96,
-    12: 91, 13: 95, 14: 93, 15: 97,
-}
-_BG_ANSI: Dict[int, int] = {
-    0: 40, 1: 44, 2: 42, 3: 46,
-    4: 41, 5: 45, 6: 43, 7: 47,
-}
+    def list_fonts(self):
+        """Return a sorted list of available font names (without path or extension)."""
+        return [
+            os.path.splitext(os.path.basename(p))[0]
+            for p in self._list_font_paths()
+        ]
 
+    def _list_font_paths(self):
+        """Return a sorted list of full .TDF font file paths (internal use)."""
+        return sorted(glob.glob(os.path.join(self.fonts_dir, "*.TDF")))
 
-def _cp437(char: str) -> str:
-    """Translate a single latin-1 character through the CP437 table."""
-    return chr(_CP437_MAP.get(ord(char), ord(char)))
-
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-class FontType:
-    OUTLINE = "oUTLINE"
-    BLOCK   = "bLOCK"
-    COLOR   = "cOLOR"
-
-
-@dataclass
-class TDFFontHeader:
-    """Parsed header for one font variant inside a .TDF file."""
-    fontname: str
-    fonttype: str
-    letterspacing: int
-    blocksize: int
-    lettersoffsets: List[int] = field(default_factory=list)
-
-
-@dataclass
-class TDFFont:
-    """All variants parsed from a single .TDF file."""
-    path: str
-    headers: List[TDFFontHeader] = field(default_factory=list)
-    data: List[bytes] = field(default_factory=list)
-
-    @property
-    def variant_count(self) -> int:
-        return len(self.headers)
-
-    def variant_names(self) -> List[str]:
-        return [h.fontname for h in self.headers]
-
-
-@dataclass
-class RenderMatrix:
-    """
-    The raw cell grid produced by text_renderer.
-
-    Each of the 12 rows is a dict mapping column-index → character.
-    Parallel dicts hold the foreground / background colour indices (0-15).
-    """
-    font_type: str
-    rows:      List[Dict[int, str]] = field(default_factory=lambda: [{} for _ in range(12)])
-    fg:        List[Dict[int, int]] = field(default_factory=lambda: [{} for _ in range(12)])
-    bg:        List[Dict[int, int]] = field(default_factory=lambda: [{} for _ in range(12)])
-    max_col:   int = 0
-    max_row:   int = 0
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-class CodefError(Exception):
-    """Base exception for all codef errors."""
-
-
-class FontNotFoundError(CodefError):
-    """Raised when a requested font file does not exist."""
-
-
-class FontVariantError(CodefError):
-    """Raised when a requested variant index is out of range."""
-
-
-class UnsupportedFontTypeError(CodefError):
-    """Raised for font types not yet supported (e.g. oUTLINE)."""
-
-
-# ---------------------------------------------------------------------------
-# TDFRenderer
-# ---------------------------------------------------------------------------
-
-class TDFRenderer:
-    """
-    High-level interface for rendering text with TheDraw Fonts.
-
-    Parameters
-    ----------
-    fonts_dir : str | Path | None
-        Directory that contains .TDF font files.  Defaults to a ``FONTS/``
-        folder located next to this library file.  Pass an explicit path to
-        override.
-    default_spacing : int
-        Columns of blank space inserted between rendered characters.
-    default_space_size : int
-        Width (in columns) of the ASCII space character.
-    """
-
-    #: Default FONTS/ folder sits next to this file, not the caller's cwd
-    _DEFAULT_FONTS_DIR = Path(__file__).parent / "FONTS"
-
-    def __init__(
-        self,
-        fonts_dir: str | Path | None = None,
-        default_spacing: int = 2,
-        default_space_size: int = 5,
-    ) -> None:
-        self.fonts_dir = Path(fonts_dir) if fonts_dir is not None else self._DEFAULT_FONTS_DIR
-        self.default_spacing = default_spacing
-        self.default_space_size = default_space_size
-        self._cache: Dict[str, TDFFont] = {}
-
-    # ------------------------------------------------------------------
-    # Font discovery
-    # ------------------------------------------------------------------
-
-    def list_fonts(self) -> List[Path]:
-        """Return sorted list of .TDF paths found in *fonts_dir*."""
-        return sorted(self.fonts_dir.glob("*.TDF"))
-
-    def font_path(self, index: int) -> Path:
-        """Resolve a font by numeric index from :meth:`list_fonts`."""
-        paths = self.list_fonts()
-        if not paths:
-            raise FontNotFoundError(f"No .TDF files found in {self.fonts_dir}")
-        if index < 0 or index >= len(paths):
-            raise FontNotFoundError(
-                f"Font index {index} out of range (0–{len(paths) - 1}). "
-                f"Found: {[p.name for p in paths]}"
-            )
-        return paths[index]
-
-    # ------------------------------------------------------------------
-    # TDF parsing
-    # ------------------------------------------------------------------
-
-    def load_tdf(self, path: str | Path) -> TDFFont:
+    def render(self, text, font_index=0, variant=0, output_mode="ansi"):
         """
-        Parse a .TDF file and return a :class:`TDFFont`.
-
-        Results are cached; subsequent calls with the same path are free.
-        """
-        path = Path(path)
-        key = str(path.resolve())
-        if key in self._cache:
-            return self._cache[key]
-
-        if not path.exists():
-            raise FontNotFoundError(f"TDF file not found: {path}")
-
-        raw = path.read_bytes()
-        font = self._parse_tdf(str(path), raw)
-        self._cache[key] = font
-        return font
-
-    @staticmethod
-    def _parse_tdf(path: str, raw: bytes) -> TDFFont:
-        font = TDFFont(path=path)
-        size = len(raw)
-        offset = 0
-
-        while offset + 20 < size:
-            hdr = TDFFontHeader(
-                fontname="",
-                fonttype="",
-                letterspacing=0,
-                blocksize=0,
-            )
-
-            hdr.fontname = (
-                raw[offset + 25 : offset + 37]
-                .decode("latin-1", errors="replace")
-                .rstrip("\x00")
-            )
-
-            ftype = raw[offset + 41]
-            hdr.fonttype = {0: FontType.OUTLINE, 1: FontType.BLOCK, 2: FontType.COLOR}.get(
-                ftype, FontType.BLOCK
-            )
-
-            hdr.letterspacing = raw[offset + 42]
-            lo = raw[offset + 43]
-            hi = raw[offset + 44]
-            hdr.blocksize = (hi << 8) | lo
-
-            n = 0
-            for _ in range(94):
-                lo = raw[offset + 45 + n]
-                hi = raw[offset + 45 + n + 1]
-                hdr.lettersoffsets.append((hi << 8) | lo)
-                n += 2
-
-            data_bytes = raw[offset + 233 : offset + 233 + hdr.blocksize]
-
-            font.headers.append(hdr)
-            font.data.append(data_bytes)
-
-            offset += 212 + hdr.blocksize + 1
-
-        return font
-
-    # ------------------------------------------------------------------
-    # Matrix builder
-    # ------------------------------------------------------------------
-
-    def build_matrix(
-        self,
-        text: str,
-        tdf: TDFFont,
-        variant: int = 0,
-        spacing: Optional[int] = None,
-        space_size: Optional[int] = None,
-    ) -> RenderMatrix:
-        """
-        Render *text* into a :class:`RenderMatrix` using *tdf*.
+        Render *text* using the specified font and return the result as a string.
 
         Parameters
         ----------
-        text :
-            The string to render.
-        tdf :
-            Parsed :class:`TDFFont` (from :meth:`load_tdf`).
-        variant :
-            Which font variant inside the TDF file to use (default 0).
-        spacing :
-            Column gap between characters.  Falls back to *default_spacing*.
-        space_size :
-            Width of the space character.  Falls back to *default_space_size*.
+        text        : str   — text to render
+        font_index  : int   — index into the sorted list of .TDF files
+        variant     : int   — font variant within the .TDF file
+        output_mode : str   — "ansi" or "html"
         """
-        if variant >= tdf.variant_count:
-            raise FontVariantError(
-                f"Variant {variant} not found. Available: 0–{tdf.variant_count - 1}"
+        self._reset_state()
+        self.mytxt = text
+        self.fnum = variant
+
+        files = self._list_font_paths()
+        if not files:
+            raise FileNotFoundError(f"No .TDF font files found in {self.fonts_dir!r}")
+        if font_index < 0 or font_index >= len(files):
+            raise IndexError(
+                f"Font index {font_index} is out of range. "
+                f"Available: 0–{len(files) - 1}"
             )
 
-        hdr = tdf.headers[variant]
-        if hdr.fonttype == FontType.OUTLINE:
-            raise UnsupportedFontTypeError("oUTLINE font type is not supported.")
+        return self._load_tdf(files[font_index], output_mode=output_mode)
 
-        spacing    = spacing    if spacing    is not None else self.default_spacing
-        space_size = space_size if space_size is not None else self.default_space_size
+    # -----------------------------------------------------------------------
+    # TDF loading
+    # -----------------------------------------------------------------------
 
-        mat = RenderMatrix(font_type=hdr.fonttype)
+    def _load_tdf(self, tdf_path, output_mode="ansi"):
+        self.workvar = {
+            "signature": "",
+            "fontnum": 0,
+            "size": 0,
+            "headers": [],
+            "data": [],
+        }
 
-        pos_x    = 1
-        pos_y    = 1
-        char_pos_x = 1
-        ft_col   = 15
-        bg_col   = 0
+        with open(tdf_path, "rb") as f:
+            bin_data = f.read()
 
-        def put(ch: str, col: int, row: int, fg: int, bg: int) -> None:
-            mat.rows[row][col] = ch
-            mat.fg[row][col]   = fg
-            mat.bg[row][col]   = bg
+        self._file_parser(bin_data)
+        self._font_parser(bin_data)
+        self._text_renderer()
 
-        if hdr.fonttype == FontType.COLOR:
-            for ch in text:
+        if output_mode == "html":
+            return self._render_html()
+        else:
+            return self._render_ansi()
+
+    def _file_parser(self, bin_data):
+        self.workvar["signature"] = bin_data[1:19]
+        self.workvar["size"] = len(bin_data)
+
+    def _font_parser(self, bin_data):
+        start_offset = 0
+
+        while start_offset + 20 < self.workvar["size"]:
+            header = {
+                "fontname": "",
+                "fonttype": "",
+                "letterspacing": 0,
+                "blocksize": 0,
+                "lettersoffsets": [],
+            }
+
+            header["fontname"] = bin_data[
+                start_offset + 25 : start_offset + 37
+            ].decode("latin-1", errors="replace").rstrip("\x00")
+
+            ftype = bin_data[start_offset + 41]
+            if ftype == 0:
+                header["fonttype"] = "oUTLINE"
+            elif ftype == 1:
+                header["fonttype"] = "bLOCK"
+            elif ftype == 2:
+                header["fonttype"] = "cOLOR"
+
+            header["letterspacing"] = bin_data[start_offset + 42]
+
+            lo = bin_data[start_offset + 43]
+            hi = bin_data[start_offset + 44]
+            header["blocksize"] = (hi << 8) | lo
+
+            n = 0
+            for i in range(94):
+                lo = bin_data[start_offset + 45 + n]
+                hi = bin_data[start_offset + 45 + n + 1]
+                header["lettersoffsets"].append((hi << 8) | lo)
+                n += 2
+
+            data_bytes = bin_data[
+                start_offset + 233 : start_offset + 233 + header["blocksize"]
+            ]
+
+            self.workvar["headers"].append(header)
+            self.workvar["data"].append(data_bytes)
+
+            start_offset += 212 + header["blocksize"] + 1
+            self.workvar["fontnum"] += 1
+
+    # -----------------------------------------------------------------------
+    # Text rendering into matrix
+    # -----------------------------------------------------------------------
+
+    def _text_renderer(self):
+        self.matrix   = [{} for _ in range(12)]
+        self.FTmatrix = [{} for _ in range(12)]
+        self.BGmatrix = [{} for _ in range(12)]
+
+        self.POSX = 1
+        self.POSY = 1
+        self.CHARPOSX = 1
+        self.maxPOSX = 0
+        self.maxPOSY = 0
+
+        if self.fnum >= len(self.workvar["headers"]):
+            raise IndexError(
+                f"Font variant {self.fnum} not found in this .TDF file. "
+                f"Available variants: 0–{len(self.workvar['headers']) - 1}"
+            )
+
+        font_type = self.workvar["headers"][self.fnum]["fonttype"]
+
+        if font_type == "oUTLINE":
+            raise NotImplementedError("oUTLINE font type is not supported yet")
+
+        elif font_type == "cOLOR":
+            for ch in self.mytxt:
                 code = ord(ch)
                 if 33 <= code < 126:
-                    letter_idx = code - 33
-                    off = hdr.lettersoffsets[letter_idx]
-                    if off == 65535:
-                        continue
-                    data = tdf.data[variant]
-                    max_char_width = data[off]
-                    n = 2
-                    old_pos_x = pos_x
+                    offset = self.workvar["headers"][self.fnum]["lettersoffsets"][code - 33]
+                    if offset != 65535:
+                        data = self.workvar["data"][self.fnum]
+                        max_char_width = data[offset]
+                        n = 2
+                        old_posx = self.POSX
 
-                    while True:
-                        cb = data[off + n]
-                        c  = bytes([cb]).decode("latin-1")
+                        while True:
+                            char_byte = data[offset + n]
+                            char = bytes([char_byte]).decode("latin-1")
 
-                        if c == "\r":
-                            n -= 1
-                            put(c, pos_x - 1, pos_y - 1, ft_col, bg_col)
-                            pos_x = char_pos_x
-                            pos_y += 1
-                        elif cb == 0:
-                            break
-                        else:
-                            col_byte = data[off + n + 1]
-                            bg_col   = col_byte // 16
-                            ft_col   = col_byte % 16
-                            put(c, pos_x - 1, pos_y - 1, ft_col, bg_col)
-                            pos_x += 1
+                            if char == "\r":
+                                n -= 1
+                                self._printchar(char)
+                            elif char_byte == 0:
+                                break
+                            else:
+                                col = data[offset + n + 1]
+                                self.BGCOL = col // 16
+                                self.FTCOL = col % 16
+                                self._printchar(char)
 
-                        n += 2
+                            n += 2
 
-                    mat.max_row = max(mat.max_row, pos_y - 1)
-                    pos_y = 1
-                    pos_x = old_pos_x + max_char_width + spacing
-                    mat.max_col = max(mat.max_col, pos_x - 1)
-                    char_pos_x = pos_x
+                        if self.maxPOSY < self.POSY:
+                            self.maxPOSY = self.POSY
+                        self.POSY = 1
+                        self.POSX = old_posx + max_char_width + self.curspacing
+                        if self.maxPOSX < self.POSX:
+                            self.maxPOSX = self.POSX
+                        self.CHARPOSX = self.POSX
 
                 elif code == 32:
-                    pos_x += space_size
-                    char_pos_x = pos_x
+                    self.POSX += self.curspacesize
+                    self.CHARPOSX = self.POSX
 
-        elif hdr.fonttype == FontType.BLOCK:
-            ft_col = 15
-            bg_col = 0
+        elif font_type == "bLOCK":
+            self.FTCOL = 15
+            self.BGCOL = 0
 
-            for ch in text:
+            for ch in self.mytxt:
                 code = ord(ch)
                 if 33 <= code < 126:
-                    letter_idx = code - 33
-                    off = hdr.lettersoffsets[letter_idx]
-                    if off == 65535:
-                        continue
-                    data = tdf.data[variant]
-                    max_char_width = data[off]
-                    n = 2
-                    old_pos_x = pos_x
+                    offset = self.workvar["headers"][self.fnum]["lettersoffsets"][code - 33]
+                    if offset != 65535:
+                        data = self.workvar["data"][self.fnum]
+                        max_char_width = data[offset]
+                        n = 2
+                        old_posx = self.POSX
 
-                    while True:
-                        cb = data[off + n]
-                        c  = bytes([cb]).decode("latin-1")
-                        if cb == 0:
-                            break
+                        while True:
+                            char_byte = data[offset + n]
+                            char = bytes([char_byte]).decode("latin-1")
 
-                        if c == "\r":
-                            put(c, pos_x - 1, pos_y - 1, ft_col, bg_col)
-                            pos_x = char_pos_x
-                            pos_y += 1
-                        else:
-                            put(c, pos_x - 1, pos_y - 1, ft_col, bg_col)
-                            pos_x += 1
+                            if char_byte == 0:
+                                break
+                            else:
+                                self._printchar(char)
 
-                        n += 1
+                            n += 1
 
-                    mat.max_row = max(mat.max_row, pos_y - 1)
-                    pos_y = 1
-                    pos_x = old_pos_x + max_char_width + spacing
-                    mat.max_col = max(mat.max_col, pos_x - 1)
-                    char_pos_x = pos_x
+                        if self.maxPOSY < self.POSY:
+                            self.maxPOSY = self.POSY
+                        self.POSY = 1
+                        self.POSX = old_posx + max_char_width + self.curspacing
+                        if self.maxPOSX < self.POSX:
+                            self.maxPOSX = self.POSX
+                        self.CHARPOSX = self.POSX
 
                 elif code == 32:
-                    pos_x += space_size
-                    char_pos_x = pos_x
+                    self.POSX += self.curspacesize
+                    self.CHARPOSX = self.POSX
 
-        return mat
+    def _printchar(self, char):
+        self.matrix[self.POSY - 1][self.POSX - 1]   = char
+        self.BGmatrix[self.POSY - 1][self.POSX - 1] = self.BGCOL
+        self.FTmatrix[self.POSY - 1][self.POSX - 1] = self.FTCOL
 
-    # ------------------------------------------------------------------
-    # Matrix → string converters
-    # ------------------------------------------------------------------
+        if ord(char[0]) == 13:  # \r — carriage return means new row in TDF
+            self.POSX = self.CHARPOSX
+            self.POSY += 1
+        else:
+            self.POSX += 1
 
-    @staticmethod
-    def matrix_to_ansi(mat: RenderMatrix) -> str:
-        """
-        Convert a :class:`RenderMatrix` to a string of ANSI escape codes.
+    # -----------------------------------------------------------------------
+    # CP437 → Unicode
+    # -----------------------------------------------------------------------
 
-        The returned string contains ANSI colour sequences and ends with a
-        reset code.  Write it to stdout or embed it in a file such as
-        ``/etc/motd``.
-        """
-        out   = []
+    CP437_MAP = {
+        128: 199,  129: 252,  130: 233,  131: 226,  132: 228,  133: 224,
+        134: 229,  135: 231,  136: 234,  137: 235,  138: 232,  139: 239,
+        140: 238,  141: 236,  142: 196,  143: 197,  144: 201,  145: 230,
+        146: 198,  147: 244,  148: 246,  149: 242,  150: 251,  151: 249,
+        152: 255,  153: 214,  154: 220,  155: 162,  156: 163,  157: 165,
+        158: 8359, 159: 402,  160: 225,  161: 237,  162: 243,  163: 250,
+        164: 241,  165: 209,  166: 170,  167: 186,  168: 191,  169: 8976,
+        170: 172,  171: 189,  172: 188,  173: 161,  174: 171,  175: 187,
+        176: 9617, 177: 9618, 178: 9619, 179: 9474, 180: 9508, 181: 9569,
+        182: 9570, 183: 9558, 184: 9557, 185: 9571, 186: 9553, 187: 9559,
+        188: 9565, 189: 9564, 190: 9563, 191: 9488, 192: 9492, 193: 9524,
+        194: 9516, 195: 9500, 196: 9472, 197: 9532, 198: 9566, 199: 9567,
+        200: 9562, 201: 9556, 202: 9577, 203: 9574, 204: 9568, 205: 9552,
+        206: 9580, 207: 9575, 208: 9576, 209: 9572, 210: 9573, 211: 9561,
+        212: 9560, 213: 9554, 214: 9555, 215: 9579, 216: 9578, 217: 9496,
+        218: 9484, 219: 9608, 220: 9604, 221: 9612, 222: 9616, 223: 9600,
+        224: 945,  225: 223,  226: 915,  227: 960,  228: 931,  229: 963,
+        230: 181,  231: 964,  232: 934,  233: 920,  234: 937,  235: 948,
+        236: 8734, 237: 966,  238: 949,  239: 8745, 240: 8801, 241: 177,
+        242: 8805, 243: 8804, 244: 8992, 245: 8993, 246: 247,  247: 8776,
+        248: 176,  249: 8729, 250: 183,  251: 8730, 252: 8319, 253: 178,
+        254: 9632,
+    }
+
+    def _cp437_to_unicode(self, char):
+        code = ord(char)
+        return chr(self.CP437_MAP.get(code, code))
+
+    # -----------------------------------------------------------------------
+    # ANSI colour helpers
+    # -----------------------------------------------------------------------
+
+    FT_ANSI = {
+         0: 30,  1: 34,  2: 32,  3: 36,
+         4: 31,  5: 35,  6: 33,  7: 37,
+         8: 90,  9: 94, 10: 92, 11: 96,
+        12: 91, 13: 95, 14: 93, 15: 97,
+    }
+
+    BG_ANSI = {
+        0: 40, 1: 44, 2: 42, 3: 46,
+        4: 41, 5: 45, 6: 43, 7: 47,
+    }
+
+    FT_CSS = [
+        "#000000", "#0000AA", "#00AA00", "#00AAAA",
+        "#AA0000", "#AA00AA", "#AA5500", "#AAAAAA",
+        "#555555", "#5555FF", "#55FF55", "#55FFFF",
+        "#FF5555", "#FF55FF", "#FFFF55", "#FFFFFF",
+    ]
+
+    BG_CSS = [
+        "#000000", "#0000AA", "#00AA00", "#00AAAA",
+        "#AA0000", "#AA00AA", "#AA5500", "#AAAAAA",
+        "#555555", "#5555FF", "#55FF55", "#55FFFF",
+        "#FF5555", "#FF55FF", "#FFFF55", "#FFFFFF",
+    ]
+
+    def _colconv_ansi(self, row, col):
+        ft = self.FT_ANSI.get(self.FTmatrix[row][col], 37)
+        bg = self.BG_ANSI.get(self.BGmatrix[row][col], 40)
+        return f"\x1b[{bg};{ft}m"
+
+    # -----------------------------------------------------------------------
+    # Output: ANSI
+    # -----------------------------------------------------------------------
+
+    def _render_ansi(self):
+        font_type = self.workvar["headers"][self.fnum]["fonttype"]
         old_esc = ""
+        out = []
 
         for i in range(12):
-            row = mat.rows[i]
-            if not row:
+            if not self.matrix[i]:
                 continue
 
-            max_col = max(row.keys())
+            max_col = max(self.matrix[i].keys())
 
             for n in range(max_col + 1):
-                if n not in row:
+                if n not in self.matrix[i]:
                     out.append("\x1b[0m ")
                     old_esc = "\x1b[0m"
 
-                elif row[n] == "\r":
-                    if mat.font_type == FontType.COLOR and old_esc != "\x1b[0m":
+                elif self.matrix[i][n] == "\r":
+                    if font_type == "cOLOR" and old_esc != "\x1b[0m":
                         out.append("\x1b[0m")
                         old_esc = "\x1b[0m"
                     out.append(" ")
 
                 else:
-                    if mat.font_type == FontType.COLOR:
-                        ft = _FT_ANSI.get(mat.fg[i][n], 37)
-                        bg = _BG_ANSI.get(mat.bg[i][n], 40)
-                        new_esc = f"\x1b[{bg};{ft}m"
+                    if font_type == "cOLOR":
+                        new_esc = self._colconv_ansi(i, n)
                         if new_esc != old_esc:
                             out.append(new_esc)
                             old_esc = new_esc
 
-                    out.append(_cp437(row[n]))
+                    out.append(self._cp437_to_unicode(self.matrix[i][n]))
 
             out.append("\x1b[0m\n")
             old_esc = "\x1b[0m"
 
         return "".join(out)
 
-    @staticmethod
-    def matrix_to_html(mat: RenderMatrix, title: str = "CODEF") -> str:
-        """
-        Convert a :class:`RenderMatrix` to a self-contained HTML page string.
+    # -----------------------------------------------------------------------
+    # Output: HTML
+    # -----------------------------------------------------------------------
 
-        The page uses the CGA/DOS colour palette and a monospace font stack.
-        Drop ``Perfect DOS VGA 437 Win.woff`` next to the HTML file to get
-        the authentic 8×16 DOS look.
-        """
-        rows_html: List[str] = []
+    def _render_html(self):
+        font_type = self.workvar["headers"][self.fnum]["fonttype"]
+        rows_html = []
 
         for i in range(12):
-            row = mat.rows[i]
-            if not row:
+            if not self.matrix[i]:
                 continue
 
-            max_col = max(row.keys())
-            parts: List[str] = []
-            cur_fg: Optional[str] = None
-            cur_bg: Optional[str] = None
-            buf: List[str] = []
+            max_col = max(self.matrix[i].keys())
+            row_parts = []
+            current_fg = None
+            current_bg = None
+            current_chars = []
 
-            def flush() -> None:
-                if not buf:
+            def flush_span():
+                if not current_chars:
                     return
-                text = (
-                    "".join(buf)
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                )
-                if mat.font_type == FontType.COLOR:
-                    style = f"color:{cur_fg};background:{cur_bg}"
+                text = "".join(current_chars)
+                text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                if font_type == "cOLOR":
+                    style = f"color:{current_fg};background:{current_bg}"
                 else:
                     style = "color:#FFFFFF;background:#000000"
-                parts.append(f'<span style="{style}">{text}</span>')
-                buf.clear()
+                row_parts.append(f'<span style="{style}">{text}</span>')
+                current_chars.clear()
 
             for n in range(max_col + 1):
-                if n not in row or row[n] == "\r":
-                    if mat.font_type == FontType.COLOR:
-                        fg = cur_fg or "#FFFFFF"
-                        bg = cur_bg or "#000000"
-                        if fg != cur_fg or bg != cur_bg:
-                            flush()
-                            cur_fg, cur_bg = fg, bg
-                    buf.append("\u00a0")
+                if n not in self.matrix[i] or self.matrix[i][n] == "\r":
+                    fg = self.FT_CSS[current_fg_idx] if current_fg is not None else "#FFFFFF"
+                    bg = self.BG_CSS[current_bg_idx] if current_bg is not None else "#000000"
+                    if font_type == "cOLOR" and (fg != current_fg or bg != current_bg):
+                        flush_span()
+                        current_fg = fg
+                        current_bg = bg
+                    current_chars.append("\u00a0")
                 else:
-                    char = row[n]
-                    if mat.font_type == FontType.COLOR:
-                        fg = _FT_CSS[mat.fg[i].get(n, 15) % len(_FT_CSS)]
-                        bg = _BG_CSS[mat.bg[i].get(n,  0) % len(_BG_CSS)]
+                    char = self.matrix[i][n]
+                    if font_type == "cOLOR":
+                        current_fg_idx = self.FTmatrix[i][n]
+                        current_bg_idx = self.BGmatrix[i][n]
+                        fg = self.FT_CSS[current_fg_idx % len(self.FT_CSS)]
+                        bg = self.BG_CSS[current_bg_idx % len(self.BG_CSS)]
                     else:
+                        current_fg_idx = 15
+                        current_bg_idx = 0
                         fg = "#FFFFFF"
                         bg = "#000000"
 
-                    if fg != cur_fg or bg != cur_bg:
-                        flush()
-                        cur_fg, cur_bg = fg, bg
+                    if fg != current_fg or bg != current_bg:
+                        flush_span()
+                        current_fg = fg
+                        current_bg = bg
 
-                    buf.append(_cp437(char))
+                    current_chars.append(self._cp437_to_unicode(char))
 
-            flush()
-            rows_html.append("".join(parts))
+            flush_span()
+            rows_html.append("".join(row_parts))
 
-        inner = "\n".join(
-            f'<div class="ansi-row">{r}</div>' for r in rows_html
-        )
+        inner = "\n".join(f'<div class="ansi-row">{r}</div>' for r in rows_html)
 
         return f"""\
 <!DOCTYPE html>
@@ -522,25 +442,38 @@ class TDFRenderer:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CODEF ANSI Logo — {title}</title>
+<title>TDFRender ANSI Logo — {self.mytxt}</title>
 <style>
-  @font-face {{
-    font-family: 'PerfectDOS';
-    src: url('CSS/Perfect DOS VGA 437 Win.woff') format('woff');
+  html, body {{
+    margin: 0;
+    padding: 0;
+    background: #000;
+    color: #fff;
   }}
-  html, body {{ margin:0; padding:0; background:#000; color:#fff; }}
+
   .ansi-output {{
     display: inline-block;
-    font-family: 'PerfectDOS', 'Courier New', monospace;
+    font-family: 'Courier New', 'Lucida Console', monospace;
     font-size: 16px;
-    line-height: 2px;
+    line-height: 0px;
     letter-spacing: 0;
     white-space: pre;
     padding: 1em;
     background: #000;
   }}
-  .ansi-row {{ display:block; height:16px; line-height:16px; overflow:hidden; }}
-  span {{ display:inline; white-space:pre; line-height:16px; }}
+
+  .ansi-row {{
+    display: block;
+    height: 16px;
+    line-height: 16px;
+    overflow: hidden;
+  }}
+
+  span {{
+    display: inline;
+    white-space: pre;
+    line-height: 16px;
+  }}
 </style>
 </head>
 <body>
@@ -550,62 +483,3 @@ class TDFRenderer:
 </body>
 </html>
 """
-
-    # ------------------------------------------------------------------
-    # Convenience one-shot render methods
-    # ------------------------------------------------------------------
-
-    def render_ansi(
-        self,
-        text: str,
-        *,
-        font_index: Optional[int] = None,
-        font_path: Optional[str | Path] = None,
-        variant: int = 0,
-        spacing: Optional[int] = None,
-        space_size: Optional[int] = None,
-    ) -> str:
-        """
-        Render *text* and return an ANSI escape-code string.
-
-        Provide either *font_index* (picks from ``fonts_dir``) or an explicit
-        *font_path*.  Defaults to font index 0 when neither is given.
-        """
-        tdf = self._resolve_font(font_index, font_path)
-        mat = self.build_matrix(text, tdf, variant=variant,
-                                spacing=spacing, space_size=space_size)
-        return self.matrix_to_ansi(mat)
-
-    def render_html(
-        self,
-        text: str,
-        *,
-        font_index: Optional[int] = None,
-        font_path: Optional[str | Path] = None,
-        variant: int = 0,
-        spacing: Optional[int] = None,
-        space_size: Optional[int] = None,
-    ) -> str:
-        """
-        Render *text* and return a self-contained HTML page string.
-
-        Same font-selection parameters as :meth:`render_ansi`.
-        """
-        tdf = self._resolve_font(font_index, font_path)
-        mat = self.build_matrix(text, tdf, variant=variant,
-                                spacing=spacing, space_size=space_size)
-        return self.matrix_to_html(mat, title=text)
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _resolve_font(
-        self,
-        font_index: Optional[int],
-        font_path: Optional[str | Path],
-    ) -> TDFFont:
-        if font_path is not None:
-            return self.load_tdf(font_path)
-        idx = 0 if font_index is None else font_index
-        return self.load_tdf(self.font_path(idx))

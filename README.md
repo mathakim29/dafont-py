@@ -3,7 +3,7 @@
 
 ## CLI Usage: 
 ```
-usage: render_font [-h] [--font INDEX] [--spacing N] [--space-size N] [--variant INDEX] [--list-fonts] text
+usage: dafont.render [-h] [--font INDEX] [--spacing N] [--space-size N] [--variant INDEX] [--list-fonts] text
 
 positional arguments:
   text                  Text to render as ANSI/HTML art
@@ -20,34 +20,22 @@ options:
 
 ## Library Usage
 ```python
-from codef import TDFRenderer
+from tdf_renderer import TDFRender
 
-renderer = TDFRenderer("FONTS/")          # point at your TDF directory
-print(renderer.render_ansi("HELLO"))        # ANSI escape-code string
-print(renderer.render_html("HELLO"))        # self-contained HTML page
-```
+r = TDFRender()
 
-### Selecting fonts / variants
-```python
-fonts = renderer.list_fonts()               # list of available font paths
-ansi  = renderer.render_ansi("HI", font_index=2)
-ansi  = renderer.render_ansi("HI", font_path="FONTS/BLOCK.TDF")
-ansi  = renderer.render_ansi("HI", font_index=0, variant=1)
-```
+# List available font names
+print(r.list_fonts())
+# ['ANSISYS', 'BROADWAY', 'ROMAN', ...]
 
-### Tweaking spacing
-```python
-ansi = renderer.render_ansi(
-    "HI",
-    spacing=3,       # columns between characters (default 2)
-    space_size=6,    # width of the space character (default 5)
-)
-```
+# Render text as ANSI escape codes (print to terminal)
+print(r.render("Hello", font_index=0))
 
-### Lower-level access
-```python
-tdf  = renderer.load_tdf("FONTS/BLOCK.TDF")   # TDFFont object (get fonts directly from user-defined directory)
-mat  = renderer.build_matrix("HI", tdf)        # RenderMatrix object
-ansi = renderer.matrix_to_ansi(mat)
-html = renderer.matrix_to_html(mat, title="HI")
+# Render as HTML string
+html = r.render("Hello", font_index=0, output_mode="html")
+with open("output.html", "w") as f:
+    f.write(html)
+
+# Use a specific font variant (some .TDF files contain multiple)
+print(r.render("World", font_index=2, variant=1))
 ```
