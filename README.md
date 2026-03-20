@@ -1,5 +1,5 @@
 # TDFont Renderer in Python (Remake)
-[Original repository](https://github.com/N0NameN0/CODEF_Ansi_Logo_Maker)
+[Original repository by Antoine Santo (NoNameNo)](https://github.com/N0NameN0/CODEF_Ansi_Logo_Maker)
 
 ## CLI Usage: 
 ```
@@ -39,3 +39,6 @@ with open("output.html", "w") as f:
 # Use a specific font variant (some .TDF files contain multiple)
 print(r.render("World", font_index=2, variant=1))
 ```
+
+## Example
+<img src="example.png">
